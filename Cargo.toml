@@ -1,0 +1,23 @@
+[package]
+name = "vt"
+description = "A terminal media player written in Rust."
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+base64 = "0.22.1"
+ctrlc = "3.5.2"
+ffmpeg-next = "8.1.0"
+rodio = "0.19"
+sixel-rs = "0.5.0"
+tempfile = "3.15"
+terminal_size = "0.4.4"
+thiserror = "2.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
