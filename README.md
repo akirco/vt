@@ -40,25 +40,7 @@ vt video.mp4 -c 128 -d fs -q high
 | [chafa](https://github.com/hpjansson/chafa)        | C      | 图像转换神器，支持丰富符号集和色彩空间 |
 | [viu](https://github.com/atanunq/viu)              | Rust   | 轻量图像查看器，支持 iTerm/Kitty       |
 | [buddy](https://github.com/JVSCHANDRADITHYA/buddy) | Python | 灵感来源，3种渲染模式，区域平均降采样  |
-
-**timg** - 老牌终端媒体查看器，支持图片、视频、GIF、PDF 甚至摄像头，功能极其丰富。
-
-**chafa** - 终端图形界的瑞士军刀，支持从电传打字机到现代终端的各种设备，符号集极其丰富。
-
-**viu** - 简洁的 Rust 图像查看器，3.1k+ stars，支持 iTerm/Kitty 协议和 Unicode 半块字符。
-
-**buddy** - Python 编写的终端视频播放器，使用 24 位真彩色和 Unicode 半块字符，采用区域平均降采样算法。
-
-## 灵感来源
-
-本项目受 [buddy](https://github.com/JVSCHANDRADITHYA/buddy) 启发。buddy 是"Block-based Unicode Direct-color Display Yield"的缩写，使用 Python + NumPy 实现，通过 Unicode 半块字符 `▀` 实现双倍垂直分辨率，配合 24 位真彩色输出高质量终端视频。
-
-vt 在 buddy 的理念基础上：
-
-- 使用 **Rust** 重写，带来零成本抽象和内存安全
-- 添加 **Sixel/Kitty 协议**支持，输出更高质量的图形
-- 集成 **音频播放**功能
-- 利用 **FFmpeg** 进行硬件加速解码
+| [see](https://github.com/svanichkin/see/)          | Go     | 支持音频播放                           |
 
 ## 目前存在的问题
 
@@ -73,7 +55,7 @@ vt 在 buddy 的理念基础上：
 9. **RGB buffer 容量计算可能不准确** - 基于 width*height*3 估算可能不符合实际
 10. **无文件合法性检查** - 未检查输入文件是否存在或可读
 11. **图像大小与终端大小缩放算法存在问题**
-12. **图片文件解码**
+12. **图片文件解码** - 当前：ffmpeg
 
 ---
 

@@ -1,9 +1,9 @@
-use crate::decoder::VideoDecoder;
 use crate::display::{CursorGuard, clear_screen, hide_cursor, move_cursor_home, write_status_line};
 use crate::error::Result;
 use crate::kitty::KittyEncoder;
 use crate::sixel::SixelEncoder;
 use crate::terminal::ImageProtocol;
+use crate::video::VideoDecoder;
 use sixel_rs::optflags::{DiffusionMethod, Quality};
 
 use ffmpeg_next as ffmpeg;

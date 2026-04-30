@@ -7,8 +7,10 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.102"
 base64 = "0.22.1"
+clap = { version = "4.6.1", features = ["derive"] }
 ctrlc = "3.5.2"
 ffmpeg-next = "8.1.0"
+image = "0.25.10"
 rodio = "0.19"
 sixel-rs = "0.5.0"
 tempfile = "3.15"

@@ -1,23 +1,24 @@
 mod args;
 mod audio;
-mod decoder;
 mod display;
 mod error;
 mod kitty;
 mod player;
 mod sixel;
 mod terminal;
+mod video;
 
 use crate::error::Result;
 use ffmpeg_next as ffmpeg;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 
 fn main() -> Result<()> {
     ffmpeg::init()?;
 
-    let config = args::parse_args()?;
+    let cli = args::Cli::parse_args();
+    let config: args::Config = cli.into();
     let protocol = terminal::determine_protocol(config.force_protocol.as_deref());
 
     let running = Arc::new(AtomicBool::new(true));
@@ -33,7 +34,7 @@ fn main() -> Result<()> {
         .ok_or(error::Error::NoVideoStream)?;
     let video_stream_index = video_stream.index();
 
-    let decoder = decoder::VideoDecoder::new(&video_stream)?;
+    let decoder = video::VideoDecoder::new(&video_stream)?;
     let (orig_width, orig_height) = decoder.original_dimensions();
 
     let target_width = (orig_width as f32 * config.scale) as u32;
