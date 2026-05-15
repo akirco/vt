@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -44,17 +45,18 @@ jobs:
             libswscale-dev \
             libavdevice-dev
 
-      - name: Install system dependencies (macOS)
+      - name: Install system dependencies (macOS x86_64 cross)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install pkg-config ffmpeg
+          softwareupdate --install-rosetta --agree-to-license || true
+          arch -x86_64 /usr/local/bin/brew install pkg-config ffmpeg || true
+          arch -x86_64 pkg-config --libs libavcodec
 
-      - name: Install system dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install ffmpeg
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          PKG_CONFIG_ALLOW_CROSS: 1
+          PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
 
       - name: Package
         shell: bash
