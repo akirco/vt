@@ -1,17 +1,17 @@
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use std::io::{self, Write};
 
 pub struct KittyEncoder {
     frame_id: u32,
-    b64_buffer: String,
+    b64_buffer: Vec<u8>,
 }
 
 impl KittyEncoder {
     pub fn new() -> Self {
         Self {
             frame_id: 0,
-            b64_buffer: String::new(),
+            b64_buffer: Vec::new(),
         }
     }
 
@@ -31,10 +31,14 @@ impl KittyEncoder {
 
         write!(writer, "\x1b[H")?;
 
+        let encoded_len = rgb_data.len().div_ceil(3) * 4;
         self.b64_buffer.clear();
-        BASE64.encode_string(rgb_data, &mut self.b64_buffer);
+        self.b64_buffer.resize(encoded_len, 0);
+        BASE64
+            .encode_slice(rgb_data, &mut self.b64_buffer)
+            .expect("buffer is exactly sized for base64 output");
 
-        let chunks = self.b64_buffer.as_bytes().chunks(4096);
+        let chunks = self.b64_buffer.chunks(16384);
         let num_chunks = chunks.len();
 
         for (i, chunk) in chunks.enumerate() {

@@ -19,6 +19,15 @@ pub enum Error {
 
     #[error("Args error: {0}")]
     Args(String),
+
+    #[error("Image error: {0}")]
+    Image(String),
+}
+
+impl From<image::ImageError> for Error {
+    fn from(e: image::ImageError) -> Self {
+        Error::Image(e.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

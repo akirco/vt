@@ -1,7 +1,11 @@
 mod args;
+mod ascii;
 mod audio;
+mod braille;
 mod display;
 mod error;
+mod halfblock;
+mod image;
 mod kitty;
 mod player;
 mod sixel;
@@ -9,17 +13,120 @@ mod terminal;
 mod video;
 
 use crate::error::Result;
+use crate::terminal::is_fzf_preview;
+use display::{CursorGuard, clear_screen, hide_cursor};
 use ffmpeg_next as ffmpeg;
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use terminal_size::terminal_size;
 
 fn main() -> Result<()> {
-    ffmpeg::init()?;
-
     let cli = args::Cli::parse_args();
     let config: args::Config = cli.into();
     let protocol = terminal::determine_protocol(config.force_protocol.as_deref());
+
+    if image::is_image_extension(&config.path) {
+        if let Err(e) = run_image(&config, protocol) {
+            if config.verbose {
+                eprintln!("image crate failed, falling back to FFmpeg: {e}");
+            }
+            run_video(&config, protocol)?;
+        }
+    } else {
+        run_video(&config, protocol)?;
+    }
+
+    Ok(())
+}
+
+fn run_image(config: &args::Config, protocol: terminal::ImageProtocol) -> Result<()> {
+    let (img, orig_w, orig_h) = image::load_image(&config.path)?;
+    let (tw, th) = terminal::fit_dimensions(orig_w, orig_h, config.scale, config.size, protocol);
+
+    let rgb_data = image::resize_image(img, tw, th);
+
+    let (cols, rows) = terminal_size()
+        .map(|(w, h)| (w.0 as u32, h.0 as u32))
+        .unwrap_or((80, 24));
+
+    let (frame_cols, frame_rows) = match protocol {
+        terminal::ImageProtocol::HalfBlock => (tw, th / 2),
+        terminal::ImageProtocol::Braille => (tw / 2, th / 4),
+        terminal::ImageProtocol::Ascii => (tw, th),
+        _ => (0, 0),
+    };
+    let cx = if frame_cols > 0 && frame_cols < cols {
+        (cols - frame_cols) / 2
+    } else {
+        0
+    };
+    let cy = if frame_rows > 0 && frame_rows < rows {
+        (rows - frame_rows) / 2
+    } else {
+        0
+    };
+
+    let _guard = CursorGuard;
+    let stdout = std::io::stdout();
+    let mut stdout_lock = stdout.lock();
+    clear_screen(&mut stdout_lock)?;
+    hide_cursor(&mut stdout_lock)?;
+
+    match protocol {
+        terminal::ImageProtocol::Sixel => {
+            let mut enc =
+                sixel::SixelEncoder::new(config.colors, config.diffusion, config.quality)?;
+            stdout_lock.flush()?;
+            drop(stdout_lock);
+            enc.encode_frame(tw as usize, th as usize, &rgb_data)?;
+        }
+        terminal::ImageProtocol::Kitty => {
+            let mut enc = kitty::KittyEncoder::new();
+            enc.encode_frame(&mut stdout_lock, tw as usize, th as usize, &rgb_data)?;
+        }
+        terminal::ImageProtocol::HalfBlock => {
+            let mut enc = halfblock::HalfBlockEncoder::new();
+            enc.encode_frame(
+                &mut stdout_lock,
+                tw as usize,
+                th as usize,
+                &rgb_data,
+                cx,
+                cy,
+            )?;
+        }
+        terminal::ImageProtocol::Braille => {
+            let mut enc = braille::BrailleEncoder::new();
+            enc.encode_frame(
+                &mut stdout_lock,
+                tw as usize,
+                th as usize,
+                &rgb_data,
+                cx,
+                cy,
+            )?;
+        }
+        terminal::ImageProtocol::Ascii => {
+            let mut enc = ascii::AsciiEncoder::new();
+            enc.encode_frame(
+                &mut stdout_lock,
+                tw as usize,
+                th as usize,
+                &rgb_data,
+                cx,
+                cy,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_video(config: &args::Config, protocol: terminal::ImageProtocol) -> Result<()> {
+    ffmpeg::init()?;
+    ffmpeg::log::set_level(ffmpeg::log::Level::Error);
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
@@ -37,8 +144,8 @@ fn main() -> Result<()> {
     let decoder = video::VideoDecoder::new(&video_stream)?;
     let (orig_width, orig_height) = decoder.original_dimensions();
 
-    let target_width = (orig_width as f32 * config.scale) as u32;
-    let target_height = (orig_height as f32 * config.scale) as u32;
+    let (target_width, target_height) =
+        terminal::fit_dimensions(orig_width, orig_height, config.scale, config.size, protocol);
 
     let audio_stream_info = if config.audio {
         ictx.streams()
@@ -95,6 +202,7 @@ fn main() -> Result<()> {
         None
     };
 
+    let preview_mode = is_fzf_preview();
     let mut player = player::Player::new(
         &video_stream,
         player::PlayerConfig {
@@ -105,8 +213,13 @@ fn main() -> Result<()> {
             diffusion: config.diffusion,
             quality: config.quality,
             verbose: config.verbose,
+            preview_mode,
         },
     )?;
+
+    if preview_mode && config.verbose {
+        eprintln!("fzf preview mode: limiting to first 5 seconds");
+    }
 
     player.run(ictx, video_stream_index, audio_sender, running.clone())?;
 

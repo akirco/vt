@@ -1,5 +1,8 @@
+use crate::ascii::AsciiEncoder;
+use crate::braille::BrailleEncoder;
 use crate::display::{CursorGuard, clear_screen, hide_cursor, move_cursor_home, write_status_line};
 use crate::error::Result;
+use crate::halfblock::HalfBlockEncoder;
 use crate::kitty::KittyEncoder;
 use crate::sixel::SixelEncoder;
 use crate::terminal::ImageProtocol;
@@ -11,7 +14,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 type AudioInfo = (
     mpsc::Sender<Vec<f32>>,
@@ -29,19 +32,27 @@ pub struct PlayerConfig {
     pub diffusion: DiffusionMethod,
     pub quality: Quality,
     pub verbose: bool,
+    pub preview_mode: bool,
 }
+
+const PREVIEW_MAX_SECS: f64 = 5.0;
 
 pub struct Player {
     decoder: VideoDecoder,
     sixel_enc: Option<SixelEncoder>,
     kitty_enc: Option<KittyEncoder>,
+    halfblock_enc: Option<HalfBlockEncoder>,
+    braille_enc: Option<BrailleEncoder>,
+    ascii_enc: Option<AsciiEncoder>,
     target_width: u32,
     target_height: u32,
     frame_duration: f64,
+    time_base: f64,
     protocol: ImageProtocol,
     colors: u8,
     rgb_buffer: Vec<u8>,
     verbose: bool,
+    preview_mode: bool,
 }
 
 impl Player {
@@ -65,8 +76,36 @@ impl Player {
             None
         };
 
-        let fps = stream.avg_frame_rate().0 as f64 / stream.avg_frame_rate().1 as f64;
-        let frame_duration = if fps > 0.0 { 1.0 / fps } else { 0.0 };
+        let halfblock_enc = if config.protocol == ImageProtocol::HalfBlock {
+            Some(HalfBlockEncoder::new())
+        } else {
+            None
+        };
+
+        let braille_enc = if config.protocol == ImageProtocol::Braille {
+            Some(BrailleEncoder::new())
+        } else {
+            None
+        };
+
+        let ascii_enc = if config.protocol == ImageProtocol::Ascii {
+            Some(AsciiEncoder::new())
+        } else {
+            None
+        };
+
+        let fps = {
+            let r = stream.avg_frame_rate();
+            if r.0 > 0 && r.1 > 0 {
+                r.0 as f64 / r.1 as f64
+            } else {
+                30.0
+            }
+        };
+        let frame_duration = 1.0 / fps;
+
+        let tb = stream.time_base();
+        let time_base = tb.0 as f64 / tb.1 as f64;
 
         let buffer_capacity = (config.target_width * config.target_height * 3) as usize;
         let rgb_buffer = Vec::with_capacity(buffer_capacity);
@@ -75,13 +114,18 @@ impl Player {
             decoder,
             sixel_enc,
             kitty_enc,
+            halfblock_enc,
+            braille_enc,
+            ascii_enc,
             target_width: config.target_width,
             target_height: config.target_height,
             frame_duration,
+            time_base,
             protocol: config.protocol,
             colors: config.colors,
             rgb_buffer,
             verbose: config.verbose,
+            preview_mode: config.preview_mode,
         })
     }
 
@@ -95,9 +139,29 @@ impl Player {
         let _cursor_guard = CursorGuard;
         let stdout = std::io::stdout();
         let mut stdout_lock = stdout.lock();
-
         clear_screen(&mut stdout_lock)?;
         hide_cursor(&mut stdout_lock)?;
+
+        let (cols, rows) = terminal_size::terminal_size()
+            .map(|(w, h)| (w.0 as u32, h.0 as u32))
+            .unwrap_or((80, 24));
+
+        let (frame_cols_u, frame_rows_u) = match self.protocol {
+            ImageProtocol::HalfBlock => (self.target_width, self.target_height / 2),
+            ImageProtocol::Braille => (self.target_width / 2, self.target_height / 4),
+            ImageProtocol::Ascii => (self.target_width, self.target_height),
+            _ => (0, 0),
+        };
+        let center_x = if frame_cols_u > 0 && frame_cols_u < cols {
+            (cols - frame_cols_u) / 2
+        } else {
+            0
+        };
+        let center_y = if frame_rows_u > 0 && frame_rows_u < rows {
+            (rows - frame_rows_u) / 2
+        } else {
+            0
+        };
 
         let start = Instant::now();
         let mut frame_count = 0u32;
@@ -179,7 +243,23 @@ impl Player {
             if stream.index() == video_stream_index
                 && self.decoder.process_packet(&packet, &mut self.rgb_buffer)?
             {
-                self.sync_frame(&mut last_frame_time);
+                let pts = self.decoder.last_frame_pts();
+                if let Some(pts) = pts {
+                    let target = start + Duration::from_secs_f64(pts as f64 * self.time_base);
+                    let now = Instant::now();
+                    if target > now {
+                        std::thread::sleep(target - now);
+                    }
+                } else {
+                    let elapsed = last_frame_time.elapsed().as_secs_f64();
+                    if elapsed < self.frame_duration {
+                        let remaining = self.frame_duration - elapsed;
+                        if remaining > 0.001 {
+                            std::thread::sleep(Duration::from_secs_f64(remaining));
+                        }
+                    }
+                }
+                last_frame_time = Instant::now();
 
                 match self.protocol {
                     ImageProtocol::Sixel => {
@@ -206,9 +286,53 @@ impl Player {
                             )?;
                         }
                     }
+                    ImageProtocol::HalfBlock => {
+                        if let Some(enc) = self.halfblock_enc.as_mut() {
+                            enc.encode_frame(
+                                &mut stdout_lock,
+                                self.target_width as usize,
+                                self.target_height as usize,
+                                &self.rgb_buffer,
+                                center_x,
+                                center_y,
+                            )?;
+                        }
+                    }
+                    ImageProtocol::Braille => {
+                        if let Some(enc) = self.braille_enc.as_mut() {
+                            enc.encode_frame(
+                                &mut stdout_lock,
+                                self.target_width as usize,
+                                self.target_height as usize,
+                                &self.rgb_buffer,
+                                center_x,
+                                center_y,
+                            )?;
+                        }
+                    }
+                    ImageProtocol::Ascii => {
+                        if let Some(enc) = self.ascii_enc.as_mut() {
+                            enc.encode_frame(
+                                &mut stdout_lock,
+                                self.target_width as usize,
+                                self.target_height as usize,
+                                &self.rgb_buffer,
+                                center_x,
+                                center_y,
+                            )?;
+                        }
+                    }
                 }
 
                 frame_count += 1;
+
+                if self.preview_mode
+                    && let Some(pts) = self.decoder.last_frame_pts()
+                    && pts as f64 * self.time_base >= PREVIEW_MAX_SECS
+                {
+                    break;
+                }
+
                 let elapsed = start.elapsed().as_secs_f64();
                 let fps = if elapsed > 0.0 {
                     frame_count as f64 / elapsed
@@ -222,11 +346,19 @@ impl Player {
                             ("sixel", self.sixel_enc.as_ref().unwrap().diffusion_name())
                         }
                         ImageProtocol::Kitty => ("kitty", "none"),
+                        ImageProtocol::HalfBlock => ("halfblock", "none"),
+                        ImageProtocol::Braille => ("braille", "none"),
+                        ImageProtocol::Ascii => ("ascii", "none"),
                     };
-
+                    let status_row = match self.protocol {
+                        ImageProtocol::HalfBlock => self.target_height / 2 + 2,
+                        ImageProtocol::Braille => self.target_height / 4 + 2,
+                        ImageProtocol::Ascii => self.target_height + 2,
+                        _ => self.target_height + 2,
+                    };
                     write_status_line(
                         &mut stdout_lock,
-                        self.target_height + 2,
+                        status_row,
                         fps,
                         frame_count,
                         elapsed,
@@ -242,18 +374,5 @@ impl Player {
         }
 
         Ok(())
-    }
-
-    fn sync_frame(&mut self, last_frame_time: &mut Instant) {
-        if self.frame_duration > 0.0 {
-            let elapsed_since_last = last_frame_time.elapsed().as_secs_f64();
-            if elapsed_since_last < self.frame_duration {
-                let remaining = self.frame_duration - elapsed_since_last;
-                if remaining > 0.001 {
-                    std::thread::sleep(std::time::Duration::from_secs_f64(remaining));
-                }
-            }
-        }
-        *last_frame_time = Instant::now();
     }
 }

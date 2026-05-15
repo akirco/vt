@@ -1,7 +1,10 @@
-use rodio::{OutputStream, Sink};
+use rodio::Player;
+use rodio::buffer::SamplesBuffer;
+use rodio::stream::DeviceSinkBuilder;
+use std::num::{NonZeroU16, NonZeroU32};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -16,10 +19,6 @@ pub struct AudioPlayer {
 }
 
 impl AudioPlayer {
-    /// # 参数
-    /// - config: 音频配置（采样率和声道数）
-    /// - samples_rx: 接收解码后音频样本的channel
-    /// - running: 共享的运行状态标志
     pub fn new(
         config: AudioPlayerConfig,
         samples_rx: Receiver<Vec<f32>>,
@@ -28,15 +27,22 @@ impl AudioPlayer {
         let running_clone = running.clone();
 
         let handle = thread::spawn(move || {
-            let (_stream, stream_handle) = match OutputStream::try_default() {
+            let mut sink = match DeviceSinkBuilder::open_default_sink() {
                 Ok(s) => s,
                 Err(_) => return,
+            };
+            sink.log_on_drop(false);
+
+            let channels = match NonZeroU16::new(config.channels) {
+                Some(c) => c,
+                None => return,
+            };
+            let sample_rate = match NonZeroU32::new(config.sample_rate) {
+                Some(r) => r,
+                None => return,
             };
 
-            let sink = match Sink::try_new(&stream_handle) {
-                Ok(s) => s,
-                Err(_) => return,
-            };
+            let player = Player::connect_new(sink.mixer());
 
             while let Ok(samples) = samples_rx.recv() {
                 if !running_clone.load(Ordering::SeqCst) {
@@ -47,12 +53,11 @@ impl AudioPlayer {
                     continue;
                 }
 
-                let source =
-                    rodio::buffer::SamplesBuffer::new(config.channels, config.sample_rate, samples);
-                sink.append(source);
+                let source = SamplesBuffer::new(channels, sample_rate, samples);
+                player.append(source);
             }
 
-            while !sink.empty() && running_clone.load(Ordering::SeqCst) {
+            while !player.empty() && running_clone.load(Ordering::SeqCst) {
                 thread::sleep(Duration::from_millis(100));
             }
         });

@@ -17,13 +17,12 @@ pub struct VideoDecoder {
 }
 
 impl VideoDecoder {
-    pub fn new(
-        stream: &ffmpeg::format::stream::Stream,
-    ) -> Result<Self> {
-        let context_decoder =
-            ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+    pub fn new(stream: &ffmpeg::format::stream::Stream) -> Result<Self> {
+        let context_decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
             .map_err(|e| Error::Ffmpeg(e.to_string()))?;
-        let decoder = context_decoder.decoder().video()
+        let decoder = context_decoder
+            .decoder()
+            .video()
             .map_err(|e| Error::Ffmpeg(e.to_string()))?;
         let orig_width = decoder.width();
         let orig_height = decoder.height();
@@ -44,11 +43,11 @@ impl VideoDecoder {
         (self.orig_width, self.orig_height)
     }
 
-    pub fn set_scaling(
-        &mut self,
-        target_width: u32,
-        target_height: u32,
-    ) -> Result<()> {
+    pub fn last_frame_pts(&self) -> Option<i64> {
+        self.decoded_frame.pts()
+    }
+
+    pub fn set_scaling(&mut self, target_width: u32, target_height: u32) -> Result<()> {
         let scaler = Context::get(
             self.decoder.format(),
             self.orig_width,
@@ -56,8 +55,9 @@ impl VideoDecoder {
             Pixel::RGB24,
             target_width,
             target_height,
-            Flags::FAST_BILINEAR,
-        ).map_err(|e| Error::Ffmpeg(e.to_string()))?;
+            Flags::BILINEAR,
+        )
+        .map_err(|e| Error::Ffmpeg(e.to_string()))?;
         self.scaler = Some(scaler);
         self.target_width = target_width;
         self.target_height = target_height;
@@ -71,21 +71,33 @@ impl VideoDecoder {
     ) -> Result<bool> {
         let scaler = self.scaler.as_mut().ok_or(Error::ScalingNotSet)?;
 
-        self.decoder.send_packet(packet)
+        self.decoder
+            .send_packet(packet)
             .map_err(|e| Error::Ffmpeg(e.to_string()))?;
 
         if let Ok(()) = self.decoder.receive_frame(&mut self.decoded_frame) {
-            scaler.run(&self.decoded_frame, &mut self.rgb_frame)
+            scaler
+                .run(&self.decoded_frame, &mut self.rgb_frame)
                 .map_err(|e| Error::Ffmpeg(e.to_string()))?;
 
             let width = self.rgb_frame.width() as usize;
             let height = self.rgb_frame.height() as usize;
-            let data_len = width * height * 3;
+            let width_bytes = width * 3;
+            let stride = self.rgb_frame.stride(0);
+            let total = width_bytes * height;
 
-            if output_buffer.len() != data_len {
-                output_buffer.resize(data_len, 0);
+            output_buffer.resize(total, 0);
+
+            if stride == width_bytes {
+                output_buffer.copy_from_slice(&self.rgb_frame.data(0)[..total]);
+            } else {
+                for y in 0..height {
+                    let src = y * stride;
+                    let dst = y * width_bytes;
+                    output_buffer[dst..dst + width_bytes]
+                        .copy_from_slice(&self.rgb_frame.data(0)[src..src + width_bytes]);
+                }
             }
-            output_buffer.copy_from_slice(&self.rgb_frame.data(0)[..data_len]);
             return Ok(true);
         }
         Ok(false)
