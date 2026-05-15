@@ -32,6 +32,27 @@ jobs:
       - name: Add target
         run: rustup target add ${{ matrix.target }}
 
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libavdevice-dev
+
+      - name: Install system dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install pkg-config ffmpeg
+
+      - name: Install system dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install ffmpeg
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
