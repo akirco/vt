@@ -20,26 +20,24 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install build dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get purge -y libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libasound2-dev || true
           sudo apt-get install -y \
-            pkg-config \
-            nasm \
-            cmake \
-            libclang-dev \
-            build-essential \
             libasound2-dev \
-            libdav1d-dev
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libavdevice-dev
 
-      - name: Build (static FFmpeg + dav1d)
+      - name: Build (static FFmpeg)
         env:
-          FFMPEG_CONFIGURE_FLAGS: "--enable-libdav1d"
+          PKG_CONFIG_ALL_STATIC: "1"
         run: cargo build --release
 
-      - name: Verify static
-        run: ldd target/release/vt | grep "libav" || echo "Static OK"
+      - name: Verify static linking
+        run: ldd target/release/vt | grep "libav" || echo "No dynamic FFmpeg libs - OK"
 
       - name: Package
         run: |
