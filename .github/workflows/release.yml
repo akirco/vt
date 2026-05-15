@@ -31,13 +31,20 @@ jobs:
             libswscale-dev \
             libavdevice-dev
 
-      - name: Build (static FFmpeg)
+      - name: Build (static linking)
         env:
           PKG_CONFIG_ALL_STATIC: "1"
         run: cargo build --release
 
-      - name: Verify static linking
-        run: ldd target/release/vt | grep "libav" || echo "No dynamic FFmpeg libs - OK"
+      - name: Verify static
+        run: |
+          echo "Checking dynamic dependencies..."
+          if ldd target/release/vt | grep -q "libav"; then
+            echo "❌ Still has dynamic FFmpeg libs!"
+            exit 1
+          else
+            echo "✅ Fully static – no libav*.so dependencies"
+          fi
 
       - name: Package
         run: |
