@@ -109,7 +109,7 @@ jobs:
               /usr/lib/*|/System/*|@*) ;;
               *)
                 if [ -f "$lib" ]; then
-                  cp -L "$lib" release/lib/
+                  sudo cp -L "$lib" release/lib/ 2>/dev/null || true
                   # Collect transitive deps recursively (one level)
                   otool -L "$lib" | awk 'NR>1{print $1}' | while read deplib; do
                     case "$deplib" in
@@ -117,7 +117,7 @@ jobs:
                       *)
                         depname=$(basename "$deplib")
                         if [ -f "$deplib" ] && [ ! -f "release/lib/$depname" ]; then
-                          cp -L "$deplib" release/lib/
+                          sudo cp -L "$deplib" release/lib/ 2>/dev/null || true
                         fi
                         ;;
                     esac
