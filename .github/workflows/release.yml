@@ -54,6 +54,8 @@ jobs:
         shell: pwsh
 
       - name: Build
+        env:
+          CFLAGS: ${{ runner.os == 'macOS' && '-std=gnu89' || '' }}
         run: cargo build --release
 
       - name: Package (Linux)
