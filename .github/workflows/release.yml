@@ -19,8 +19,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: macos-latest
             target: x86_64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
 
@@ -47,13 +45,6 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install ffmpeg autoconf automake libtool
-
-      - name: Install Windows dependencies (vcpkg)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          vcpkg install ffmpeg:x64-windows
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build
         env:
@@ -161,27 +152,6 @@ jobs:
           mkdir -p release-system
           cp target/release/vt release-system/
           tar -czf vt-${{ github.ref_name }}-${{ matrix.target }}-system.tar.gz -C release-system vt
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          mkdir release
-          cp target/release/vt.exe release/
-          # Copy all ffmpeg DLLs from vcpkg
-          $vcpkgBin = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin"
-          if (Test-Path $vcpkgBin) {
-            Get-ChildItem $vcpkgBin -Filter "*.dll" | ForEach-Object {
-              Copy-Item $_.FullName release/ -ErrorAction SilentlyContinue
-            }
-          }
-          # Windows finds DLLs in the same directory as the exe automatically
-          Compress-Archive -Path release/* -DestinationPath vt-${{ github.ref_name }}-${{ matrix.target }}.zip -Force
-
-          # System-ffmpeg version: single exe only
-          mkdir release-system
-          Copy-Item target/release/vt.exe release-system/
-          Compress-Archive -Path release-system/* -DestinationPath vt-${{ github.ref_name }}-${{ matrix.target }}-system.zip -Force
-        shell: pwsh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
