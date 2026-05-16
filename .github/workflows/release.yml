@@ -50,8 +50,10 @@ jobs:
 
       - name: Install Windows dependencies (vcpkg)
         if: runner.os == 'Windows'
-        run: vcpkg install ffmpeg:x64-windows
         shell: pwsh
+        run: |
+          vcpkg install ffmpeg:x64-windows
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build
         env:
