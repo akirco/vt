@@ -11,16 +11,27 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install system dependencies
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -29,34 +40,144 @@ jobs:
             libavformat-dev \
             libavutil-dev \
             libswscale-dev \
-            libavdevice-dev
+            libavdevice-dev \
+            patchelf
 
-      - name: Build (static linking)
-        env:
-          PKG_CONFIG_ALL_STATIC: "1"
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install Windows dependencies (vcpkg)
+        if: runner.os == 'Windows'
+        run: vcpkg install ffmpeg:x64-windows
+        shell: pwsh
+
+      - name: Build
         run: cargo build --release
 
-      - name: Verify static
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
         run: |
-          echo "Checking dynamic dependencies..."
-          if ldd target/release/vt | grep -q "libav"; then
-            echo "❌ Still has dynamic FFmpeg libs!"
-            exit 1
-          else
-            echo "✅ Fully static – no libav*.so dependencies"
-          fi
+          mkdir -p release/lib
+          cp target/release/vt release/
 
-      - name: Package
+          # Collect non-standard shared libraries (ffmpeg + codec deps)
+          ldd target/release/vt | awk '/=> \//{print $3}' | while read lib; do
+            base=$(basename "$lib")
+            case "$base" in
+              ld-linux*|libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|libutil.so*|libstdc++.so*|libgcc_s.so*) ;;
+              *) cp -L "$lib" release/lib/ ;;
+            esac
+          done
+
+          # Collect transitive dependencies of ffmpeg libs (libx264, libvpx, etc.)
+          for ffi in release/lib/libav*.so*; do
+            [ -f "$ffi" ] || continue
+            ldd "$ffi" 2>/dev/null | awk '/=> \//{print $3}' | while read lib; do
+              base=$(basename "$lib")
+              case "$base" in
+                ld-linux*|libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|libutil.so*|libstdc++.so*|libgcc_s.so*) ;;
+                *) [ -f "$lib" ] && cp -L "$lib" release/lib/ ;;
+              esac
+            done
+          done
+
+          patchelf --set-rpath '$ORIGIN/lib' release/vt
+          tar -czf vt-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C release .
+
+          # System-ffmpeg version: single binary only
+          mkdir -p release-system
+          cp target/release/vt release-system/
+          tar -czf vt-${{ github.ref_name }}-${{ matrix.target }}-system.tar.gz -C release-system vt
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
         run: |
-          mkdir -p release
-          cp target/release/vt release/vt
-          tar -czvf vt-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz -C release vt
+          mkdir -p release/lib
+          cp target/release/vt release/
+
+          # Collect non-system dylibs
+          otool -L target/release/vt | awk 'NR>1{print $1}' | while read lib; do
+            case "$lib" in
+              /usr/lib/*|/System/*|@*) ;;
+              *)
+                if [ -f "$lib" ]; then
+                  cp -L "$lib" release/lib/
+                  # Collect transitive deps recursively (one level)
+                  otool -L "$lib" | awk 'NR>1{print $1}' | while read deplib; do
+                    case "$deplib" in
+                      /usr/lib/*|/System/*|@*) ;;
+                      *)
+                        depname=$(basename "$deplib")
+                        if [ -f "$deplib" ] && [ ! -f "release/lib/$depname" ]; then
+                          cp -L "$deplib" release/lib/
+                        fi
+                        ;;
+                    esac
+                  done
+                fi
+                ;;
+            esac
+          done
+
+          # Set rpath in binary
+          install_name_tool -add_rpath '@loader_path/lib' release/vt
+
+          # Fix dylib install names and cross-references
+          for lib in release/lib/*.dylib; do
+            [ -f "$lib" ] || continue
+            base=$(basename "$lib")
+            install_name_tool -id "@rpath/$base" "$lib" 2>/dev/null || true
+            for dep in $(otool -L "$lib" | awk 'NR>1{print $1}'); do
+              depname=$(basename "$dep" 2>/dev/null)
+              [ -z "$depname" ] && continue
+              [ "$dep" = "$lib" ] && continue
+              case "$dep" in
+                /usr/lib/*|/System/*|@*) continue ;;
+                *)
+                  if [ -f "release/lib/$depname" ]; then
+                    install_name_tool -change "$dep" "@rpath/$depname" "$lib" 2>/dev/null || true
+                  fi
+                  ;;
+              esac
+            done
+          done
+
+          tar -czf vt-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C release .
+
+          # System-ffmpeg version: single binary only
+          mkdir -p release-system
+          cp target/release/vt release-system/
+          tar -czf vt-${{ github.ref_name }}-${{ matrix.target }}-system.tar.gz -C release-system vt
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir release
+          cp target/release/vt.exe release/
+          # Copy all ffmpeg DLLs from vcpkg
+          $vcpkgBin = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin"
+          if (Test-Path $vcpkgBin) {
+            Get-ChildItem $vcpkgBin -Filter "*.dll" | ForEach-Object {
+              Copy-Item $_.FullName release/ -ErrorAction SilentlyContinue
+            }
+          }
+          # Windows finds DLLs in the same directory as the exe automatically
+          Compress-Archive -Path release/* -DestinationPath vt-${{ github.ref_name }}-${{ matrix.target }}.zip -Force
+
+          # System-ffmpeg version: single exe only
+          mkdir release-system
+          Copy-Item target/release/vt.exe release-system/
+          Compress-Archive -Path release-system/* -DestinationPath vt-${{ github.ref_name }}-${{ matrix.target }}-system.zip -Force
+        shell: pwsh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-linux
-          path: vt-*.tar.gz
+          name: release-${{ matrix.target }}
+          path: |
+            vt-*.tar.gz
+            vt-*.zip
 
   create-release:
     needs: release
