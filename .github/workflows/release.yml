@@ -45,7 +45,8 @@ jobs:
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg autoconf automake libtool
 
       - name: Install Windows dependencies (vcpkg)
         if: runner.os == 'Windows'
@@ -83,6 +84,10 @@ jobs:
           done
 
           patchelf --set-rpath '$ORIGIN/lib' release/vt
+
+          # Strip bundled shared libraries
+          find release/lib -name '*.so*' -type f -exec strip --strip-unneeded {} + 2>/dev/null || true
+
           tar -czf vt-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C release .
 
           # System-ffmpeg version: single binary only
@@ -142,6 +147,9 @@ jobs:
               esac
             done
           done
+
+          # Strip bundled dylibs
+          find release/lib -name '*.dylib' -type f -exec strip -x {} + 2>/dev/null || true
 
           tar -czf vt-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C release .
 
