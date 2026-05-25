@@ -1,11 +1,11 @@
 use crate::ascii::AsciiEncoder;
 use crate::braille::BrailleEncoder;
-use crate::display::{CursorGuard, clear_screen, hide_cursor, move_cursor_home, write_status_line};
 use crate::error::Result;
 use crate::halfblock::HalfBlockEncoder;
 use crate::kitty::KittyEncoder;
+use crate::protocol::ImageProtocol;
 use crate::sixel::SixelEncoder;
-use crate::terminal::ImageProtocol;
+use crate::terminal::{CursorGuard, clear_screen, hide_cursor};
 use crate::video::VideoDecoder;
 use sixel_rs::optflags::{DiffusionMethod, Quality};
 
@@ -33,6 +33,7 @@ pub struct PlayerConfig {
     pub quality: Quality,
     pub verbose: bool,
     pub preview_mode: bool,
+    pub center: bool,
 }
 
 const PREVIEW_MAX_SECS: f64 = 5.0;
@@ -53,6 +54,7 @@ pub struct Player {
     rgb_buffer: Vec<u8>,
     verbose: bool,
     preview_mode: bool,
+    center: bool,
 }
 
 impl Player {
@@ -126,6 +128,7 @@ impl Player {
             rgb_buffer,
             verbose: config.verbose,
             preview_mode: config.preview_mode,
+            center: config.center,
         })
     }
 
@@ -142,26 +145,12 @@ impl Player {
         clear_screen(&mut stdout_lock)?;
         hide_cursor(&mut stdout_lock)?;
 
-        let (cols, rows) = terminal_size::terminal_size()
-            .map(|(w, h)| (w.0 as u32, h.0 as u32))
-            .unwrap_or((80, 24));
-
-        let (frame_cols_u, frame_rows_u) = match self.protocol {
-            ImageProtocol::HalfBlock => (self.target_width, self.target_height / 2),
-            ImageProtocol::Braille => (self.target_width / 2, self.target_height / 4),
-            ImageProtocol::Ascii => (self.target_width, self.target_height),
-            _ => (0, 0),
-        };
-        let center_x = if frame_cols_u > 0 && frame_cols_u < cols {
-            (cols - frame_cols_u) / 2
-        } else {
-            0
-        };
-        let center_y = if frame_rows_u > 0 && frame_rows_u < rows {
-            (rows - frame_rows_u) / 2
-        } else {
-            0
-        };
+        let (center_x, center_y) = crate::terminal::compute_center_offset(
+            self.target_width,
+            self.target_height,
+            self.protocol,
+            self.center,
+        );
 
         let start = Instant::now();
         let mut frame_count = 0u32;
@@ -190,7 +179,7 @@ impl Player {
         }
 
         for (stream, packet) in ictx.packets() {
-            if !running.load(Ordering::SeqCst) {
+            if !running.load(Ordering::Acquire) {
                 break;
             }
 
@@ -204,7 +193,7 @@ impl Player {
 
                     let mut decoded = ffmpeg::util::frame::Audio::empty();
                     while decoder.receive_frame(&mut decoded).is_ok() {
-                        if !running.load(Ordering::SeqCst) {
+                        if !running.load(Ordering::Acquire) {
                             break;
                         }
 
@@ -264,7 +253,7 @@ impl Player {
                 match self.protocol {
                     ImageProtocol::Sixel => {
                         if let Some(enc) = self.sixel_enc.as_mut() {
-                            move_cursor_home(&mut stdout_lock)?;
+                            write!(stdout_lock, "\x1b[{};{}H", center_y + 1, center_x + 1)?;
                             stdout_lock.flush()?;
                             drop(stdout_lock);
                             enc.encode_frame(
@@ -277,12 +266,13 @@ impl Player {
                     }
                     ImageProtocol::Kitty => {
                         if let Some(enc) = self.kitty_enc.as_mut() {
-                            move_cursor_home(&mut stdout_lock)?;
                             enc.encode_frame(
                                 &mut stdout_lock,
                                 self.target_width as usize,
                                 self.target_height as usize,
                                 &self.rgb_buffer,
+                                center_x,
+                                center_y,
                             )?;
                         }
                     }
@@ -356,8 +346,9 @@ impl Player {
                         ImageProtocol::Ascii => self.target_height + 2,
                         _ => self.target_height + 2,
                     };
-                    write_status_line(
-                        &mut stdout_lock,
+                    write!(
+                        stdout_lock,
+                        "\x1b[{};1H\x1b[1mFPS:{:.1} F:{} T:{:.1}s {}x{} C:{} P:{} d:{}\x1b[0m\r",
                         status_row,
                         fps,
                         frame_count,

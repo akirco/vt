@@ -1,8 +1,8 @@
+use crate::sixel::{DiffusionMethod, Quality, parse_diffusion, parse_quality};
 use clap::{
-    Parser, ValueEnum,
+    Parser,
     builder::{Styles, styling::AnsiColor},
 };
-use sixel_rs::optflags::{DiffusionMethod, Quality};
 
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Yellow.on_default().bold())
@@ -14,9 +14,9 @@ const STYLES: Styles = Styles::styled()
 #[command(version, about = "A terminal media player", long_about = None, styles = STYLES)]
 pub struct Cli {
     /// Video/ Image file path
-    pub path: String,
+    pub path: Option<String>,
 
-    /// Scale factor (default: 1.0)
+    /// Scale factor
     #[arg(short, long, default_value = "1.0")]
     pub scale: f32,
 
@@ -24,13 +24,13 @@ pub struct Cli {
     #[arg(short, long, default_value = "255")]
     pub colors: u8,
 
-    /// Dithering method (Sixel only)
-    #[arg(short, long, value_enum, default_value = "auto")]
-    pub diffusion: Diffusion,
+    /// Dithering method: none, atkinson, fs, stucki, burkes, jajuni, auto (Sixel only)
+    #[arg(short, long, default_value = "auto", value_parser = parse_diffusion)]
+    pub diffusion: DiffusionMethod,
 
-    /// Quality level (Sixel only)
-    #[arg(short, long, value_enum, default_value = "auto")]
-    pub quality: QualityLevel,
+    /// Quality level: low, high, full, auto (Sixel only)
+    #[arg(short, long, default_value = "auto", value_parser = parse_quality)]
+    pub quality: Quality,
 
     /// Force protocol: sixel, kitty, halfblock, braille, ascii, auto
     #[arg(short, long)]
@@ -47,6 +47,10 @@ pub struct Cli {
     /// Output size in characters (e.g., 80x40)
     #[arg(long)]
     pub size: Option<String>,
+
+    /// Center the output on screen
+    #[arg(short = 'C', long)]
+    pub center: bool,
 }
 
 impl Cli {
@@ -70,6 +74,7 @@ pub struct Config {
     pub verbose: bool,
     pub audio: bool,
     pub size: Option<(u32, u32)>,
+    pub center: bool,
 }
 
 impl From<Cli> for Config {
@@ -84,59 +89,16 @@ impl From<Cli> for Config {
         let size = cli.size.as_deref().and_then(parse_size);
 
         Config {
-            path: cli.path,
+            path: cli.path.unwrap_or_default(),
             scale: cli.scale,
             colors,
-            diffusion: cli.diffusion.into(),
-            quality: cli.quality.into(),
+            diffusion: cli.diffusion,
+            quality: cli.quality,
             force_protocol: cli.protocol,
             verbose: cli.verbose,
             audio: cli.audio,
             size,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum Diffusion {
-    None,
-    Atkinson,
-    Fs,
-    Stucki,
-    Burkes,
-    Jajuni,
-    Auto,
-}
-
-impl From<Diffusion> for DiffusionMethod {
-    fn from(d: Diffusion) -> Self {
-        match d {
-            Diffusion::None => DiffusionMethod::None,
-            Diffusion::Atkinson => DiffusionMethod::Atkinson,
-            Diffusion::Fs => DiffusionMethod::FS,
-            Diffusion::Stucki => DiffusionMethod::Stucki,
-            Diffusion::Burkes => DiffusionMethod::Burkes,
-            Diffusion::Jajuni => DiffusionMethod::Jajuni,
-            Diffusion::Auto => DiffusionMethod::Auto,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum QualityLevel {
-    Low,
-    High,
-    Full,
-    Auto,
-}
-
-impl From<QualityLevel> for Quality {
-    fn from(q: QualityLevel) -> Self {
-        match q {
-            QualityLevel::Low => Quality::Low,
-            QualityLevel::High => Quality::High,
-            QualityLevel::Full => Quality::Full,
-            QualityLevel::Auto => Quality::Auto,
+            center: cli.center,
         }
     }
 }

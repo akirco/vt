@@ -1,4 +1,5 @@
-use std::io::{self, Write};
+use std::fmt::Write;
+use std::io::{self, Write as IoWrite};
 
 pub struct BrailleEncoder;
 
@@ -7,7 +8,7 @@ impl BrailleEncoder {
         Self
     }
 
-    pub fn encode_frame<W: Write>(
+    pub fn encode_frame<W: IoWrite>(
         &mut self,
         writer: &mut W,
         width: usize,
@@ -20,9 +21,12 @@ impl BrailleEncoder {
             return Ok(());
         }
 
+        let cap = (width / 2) * 24 + 16;
+        let mut buf = String::with_capacity(cap);
+
         for (i, by) in (0..height).step_by(4).enumerate() {
-            let row = y_off + i as u32 + 1;
-            write!(writer, "\x1b[{};{}H", row, x_off + 1)?;
+            buf.clear();
+            let _ = write!(buf, "\x1b[{};{}H", y_off + i as u32 + 1, x_off + 1);
             for bx in (0..width).step_by(2) {
                 let mut r_sum = 0u32;
                 let mut g_sum = 0u32;
@@ -51,14 +55,15 @@ impl BrailleEncoder {
                 let g_avg = g_sum.checked_div(count);
                 let b_avg = b_sum.checked_div(count);
                 if let (Some(r), Some(g), Some(b)) = (r_avg, g_avg, b_avg) {
-                    write!(
-                        writer,
+                    let _ = write!(
+                        buf,
                         "\x1b[38;2;{};{};{}m\u{28ff}",
                         r as u8, g as u8, b as u8
-                    )?;
+                    );
                 }
             }
-            write!(writer, "\x1b[0m")?;
+            buf.push_str("\x1b[0m");
+            writer.write_all(buf.as_bytes())?;
         }
 
         Ok(())

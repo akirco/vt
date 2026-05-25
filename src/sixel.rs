@@ -1,7 +1,31 @@
+pub use sixel_rs::optflags::{DiffusionMethod, Quality};
+
 use crate::error::{Error, Result};
 use sixel_rs::encoder::{Encoder, QuickFrameBuilder};
-use sixel_rs::optflags::{DiffusionMethod, Quality};
 use sixel_rs::pixelformat::PixelFormat;
+
+pub fn parse_diffusion(s: &str) -> std::result::Result<DiffusionMethod, String> {
+    match s.to_lowercase().as_str() {
+        "none" => Ok(DiffusionMethod::None),
+        "atkinson" => Ok(DiffusionMethod::Atkinson),
+        "fs" => Ok(DiffusionMethod::FS),
+        "stucki" => Ok(DiffusionMethod::Stucki),
+        "burkes" => Ok(DiffusionMethod::Burkes),
+        "jajuni" => Ok(DiffusionMethod::Jajuni),
+        "auto" => Ok(DiffusionMethod::Auto),
+        _ => Err(format!("unknown diffusion: {s}")),
+    }
+}
+
+pub fn parse_quality(s: &str) -> std::result::Result<Quality, String> {
+    match s.to_lowercase().as_str() {
+        "low" => Ok(Quality::Low),
+        "high" => Ok(Quality::High),
+        "full" => Ok(Quality::Full),
+        "auto" => Ok(Quality::Auto),
+        _ => Err(format!("unknown quality: {s}")),
+    }
+}
 
 pub struct SixelEncoder {
     encoder: Encoder,

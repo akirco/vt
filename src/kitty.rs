@@ -21,6 +21,8 @@ impl KittyEncoder {
         width: usize,
         height: usize,
         rgb_data: &[u8],
+        x_off: u32,
+        y_off: u32,
     ) -> io::Result<()> {
         if width == 0 || height == 0 || rgb_data.is_empty() {
             return Ok(());
@@ -29,11 +31,12 @@ impl KittyEncoder {
         self.frame_id += 1;
         let frame_id = self.frame_id;
 
-        write!(writer, "\x1b[H")?;
+        write!(writer, "\x1b[{};{}H", y_off + 1, x_off + 1)?;
 
         let encoded_len = rgb_data.len().div_ceil(3) * 4;
-        self.b64_buffer.clear();
-        self.b64_buffer.resize(encoded_len, 0);
+        if self.b64_buffer.len() != encoded_len {
+            self.b64_buffer.resize(encoded_len, 0);
+        }
         BASE64
             .encode_slice(rgb_data, &mut self.b64_buffer)
             .expect("buffer is exactly sized for base64 output");

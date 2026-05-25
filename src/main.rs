@@ -2,30 +2,37 @@ mod args;
 mod ascii;
 mod audio;
 mod braille;
-mod display;
 mod error;
 mod halfblock;
 mod image;
 mod kitty;
 mod player;
+mod protocol;
 mod sixel;
 mod terminal;
 mod video;
 
 use crate::error::Result;
-use crate::terminal::is_fzf_preview;
-use display::{CursorGuard, clear_screen, hide_cursor};
+use crate::terminal::{CursorGuard, clear_screen, hide_cursor, is_fzf_preview};
+use clap::CommandFactory;
 use ffmpeg_next as ffmpeg;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use terminal_size::terminal_size;
 
 fn main() -> Result<()> {
     let cli = args::Cli::parse_args();
-    let config: args::Config = cli.into();
-    let protocol = terminal::determine_protocol(config.force_protocol.as_deref());
+    let config: args::Config = match cli.path.clone() {
+        Some(_) => cli.into(),
+        None => {
+            let mut cmd = args::Cli::command();
+            cmd.print_help()?;
+            println!();
+            return Ok(());
+        }
+    };
+    let protocol = protocol::determine_protocol(config.force_protocol.as_deref());
 
     if image::is_image_extension(&config.path) {
         if let Err(e) = run_image(&config, protocol) {
@@ -41,32 +48,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_image(config: &args::Config, protocol: terminal::ImageProtocol) -> Result<()> {
+fn run_image(config: &args::Config, protocol: protocol::ImageProtocol) -> Result<()> {
     let (img, orig_w, orig_h) = image::load_image(&config.path)?;
     let (tw, th) = terminal::fit_dimensions(orig_w, orig_h, config.scale, config.size, protocol);
 
     let rgb_data = image::resize_image(img, tw, th);
 
-    let (cols, rows) = terminal_size()
-        .map(|(w, h)| (w.0 as u32, h.0 as u32))
-        .unwrap_or((80, 24));
-
-    let (frame_cols, frame_rows) = match protocol {
-        terminal::ImageProtocol::HalfBlock => (tw, th / 2),
-        terminal::ImageProtocol::Braille => (tw / 2, th / 4),
-        terminal::ImageProtocol::Ascii => (tw, th),
-        _ => (0, 0),
-    };
-    let cx = if frame_cols > 0 && frame_cols < cols {
-        (cols - frame_cols) / 2
-    } else {
-        0
-    };
-    let cy = if frame_rows > 0 && frame_rows < rows {
-        (rows - frame_rows) / 2
-    } else {
-        0
-    };
+    let (cx, cy) = terminal::compute_center_offset(tw, th, protocol, config.center);
 
     let _guard = CursorGuard;
     let stdout = std::io::stdout();
@@ -75,18 +63,26 @@ fn run_image(config: &args::Config, protocol: terminal::ImageProtocol) -> Result
     hide_cursor(&mut stdout_lock)?;
 
     match protocol {
-        terminal::ImageProtocol::Sixel => {
+        protocol::ImageProtocol::Sixel => {
             let mut enc =
                 sixel::SixelEncoder::new(config.colors, config.diffusion, config.quality)?;
+            write!(stdout_lock, "\x1b[{};{}H", cy + 1, cx + 1)?;
             stdout_lock.flush()?;
             drop(stdout_lock);
             enc.encode_frame(tw as usize, th as usize, &rgb_data)?;
         }
-        terminal::ImageProtocol::Kitty => {
+        protocol::ImageProtocol::Kitty => {
             let mut enc = kitty::KittyEncoder::new();
-            enc.encode_frame(&mut stdout_lock, tw as usize, th as usize, &rgb_data)?;
+            enc.encode_frame(
+                &mut stdout_lock,
+                tw as usize,
+                th as usize,
+                &rgb_data,
+                cx,
+                cy,
+            )?;
         }
-        terminal::ImageProtocol::HalfBlock => {
+        protocol::ImageProtocol::HalfBlock => {
             let mut enc = halfblock::HalfBlockEncoder::new();
             enc.encode_frame(
                 &mut stdout_lock,
@@ -97,7 +93,7 @@ fn run_image(config: &args::Config, protocol: terminal::ImageProtocol) -> Result
                 cy,
             )?;
         }
-        terminal::ImageProtocol::Braille => {
+        protocol::ImageProtocol::Braille => {
             let mut enc = braille::BrailleEncoder::new();
             enc.encode_frame(
                 &mut stdout_lock,
@@ -108,7 +104,7 @@ fn run_image(config: &args::Config, protocol: terminal::ImageProtocol) -> Result
                 cy,
             )?;
         }
-        terminal::ImageProtocol::Ascii => {
+        protocol::ImageProtocol::Ascii => {
             let mut enc = ascii::AsciiEncoder::new();
             enc.encode_frame(
                 &mut stdout_lock,
@@ -124,14 +120,14 @@ fn run_image(config: &args::Config, protocol: terminal::ImageProtocol) -> Result
     Ok(())
 }
 
-fn run_video(config: &args::Config, protocol: terminal::ImageProtocol) -> Result<()> {
+fn run_video(config: &args::Config, protocol: protocol::ImageProtocol) -> Result<()> {
     ffmpeg::init()?;
     ffmpeg::log::set_level(ffmpeg::log::Level::Error);
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
     ctrlc::set_handler(move || {
-        running_clone.store(false, Ordering::SeqCst);
+        running_clone.store(false, Ordering::Release);
     })?;
 
     let ictx = ffmpeg::format::input(&config.path)?;
@@ -214,6 +210,7 @@ fn run_video(config: &args::Config, protocol: terminal::ImageProtocol) -> Result
             quality: config.quality,
             verbose: config.verbose,
             preview_mode,
+            center: config.center,
         },
     )?;
 

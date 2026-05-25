@@ -45,7 +45,7 @@ impl AudioPlayer {
             let player = Player::connect_new(sink.mixer());
 
             while let Ok(samples) = samples_rx.recv() {
-                if !running_clone.load(Ordering::SeqCst) {
+                if !running_clone.load(Ordering::Acquire) {
                     break;
                 }
 
@@ -57,7 +57,7 @@ impl AudioPlayer {
                 player.append(source);
             }
 
-            while !player.empty() && running_clone.load(Ordering::SeqCst) {
+            while !player.empty() && running_clone.load(Ordering::Acquire) {
                 thread::sleep(Duration::from_millis(100));
             }
         });
@@ -69,7 +69,7 @@ impl AudioPlayer {
     }
 
     pub fn stop(&mut self) {
-        self.running.store(false, Ordering::SeqCst);
+        self.running.store(false, Ordering::Release);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }

@@ -2,6 +2,8 @@
 
 **用 Rust 打造的终端媒体播放器，让你在命令行里看视频！**
 
+> 暂时不作二进制分发，请自行构建！
+
 ## 特性
 
 - **视频播放** - 基于 FFmpeg 解码，支持常见视频格式
@@ -10,6 +12,20 @@
 - **丰富色彩** - Sixel 模式支持 2-256 色和多种抖动算法
 - **自由缩放** - 通过 --scale 调整视频尺寸
 - **状态显示** - verbose 模式实时显示 FPS 和帧数
+
+## 安装
+
+```bash
+
+# archlinux
+paru -S ffmpeg
+
+# ffmpeg version n8.1.1 Copyright (c) 2000-2026 the FFmpeg developers
+#   built with gcc 16.1.1 (GCC) 20260430
+
+cargo install --git https://github.com/akirco/vt
+
+```
 
 ## 使用
 
@@ -34,7 +50,7 @@ vt video.mp4 -p ascii # halfblock, braille
 
 | 项目                                               | 语言   | 特点                                   |
 | -------------------------------------------------- | ------ | -------------------------------------- |
-| **vt**                                             | Rust   | 双协议、音频支持、高性能               |
+| **vt**                                             | Rust   | 多协议、音频支持、高性能               |
 | [timg](https://github.com/hzeller/timg)            | C++    | 功能最全，支持摄像头、PDF、多线程解码  |
 | [chafa](https://github.com/hpjansson/chafa)        | C      | 图像转换神器，支持丰富符号集和色彩空间 |
 | [viu](https://github.com/atanunq/viu)              | Rust   | 轻量图像查看器，支持 iTerm/Kitty       |
@@ -50,7 +66,6 @@ vt video.mp4 -p ascii # halfblock, braille
 
 ---
 
-**项目地址**：[vt - Terminal Media Player](https://github.com/akirco/vt)
-**灵感项目**：[buddy](https://github.com/JVSCHANDRADITHYA/buddy)
+**灵感来源**：[buddy](https://github.com/JVSCHANDRADITHYA/buddy)
 
 ---

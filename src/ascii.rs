@@ -1,4 +1,5 @@
-use std::io::{self, Write};
+use std::fmt::Write;
+use std::io::{self, Write as IoWrite};
 
 const RAMP: &[u8] = b" .:-=+*#%@";
 
@@ -9,7 +10,7 @@ impl AsciiEncoder {
         Self
     }
 
-    pub fn encode_frame<W: Write>(
+    pub fn encode_frame<W: IoWrite>(
         &mut self,
         writer: &mut W,
         width: usize,
@@ -22,9 +23,12 @@ impl AsciiEncoder {
             return Ok(());
         }
 
+        let cap = width * 28 + 16;
+        let mut buf = String::with_capacity(cap);
+
         for y in 0..height {
-            let row = y_off + y as u32 + 1;
-            write!(writer, "\x1b[{};{}H", row, x_off + 1)?;
+            buf.clear();
+            let _ = write!(buf, "\x1b[{};{}H", y_off + y as u32 + 1, x_off + 1);
             for x in 0..width {
                 let offset = (y * width + x) * 3;
                 let r = rgb_data[offset];
@@ -36,9 +40,10 @@ impl AsciiEncoder {
                 let ch = RAMP[idx as usize] as char;
 
                 let fg = if luminance > 140 { "30" } else { "37" };
-                write!(writer, "\x1b[48;2;{};{};{}m\x1b[{}m{}", r, g, b, fg, ch)?;
+                let _ = write!(buf, "\x1b[48;2;{};{};{}m\x1b[{}m{}", r, g, b, fg, ch);
             }
-            write!(writer, "\x1b[0m")?;
+            buf.push_str("\x1b[0m");
+            writer.write_all(buf.as_bytes())?;
         }
 
         Ok(())

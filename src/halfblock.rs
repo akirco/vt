@@ -1,4 +1,5 @@
-use std::io::{self, Write};
+use std::fmt::Write;
+use std::io::{self, Write as IoWrite};
 
 pub struct HalfBlockEncoder;
 
@@ -7,7 +8,7 @@ impl HalfBlockEncoder {
         Self
     }
 
-    pub fn encode_frame<W: Write>(
+    pub fn encode_frame<W: IoWrite>(
         &mut self,
         writer: &mut W,
         width: usize,
@@ -20,9 +21,12 @@ impl HalfBlockEncoder {
             return Ok(());
         }
 
+        let cap = width * 40 + 16;
+        let mut buf = String::with_capacity(cap);
+
         for (i, y) in (0..height).step_by(2).enumerate() {
-            let row = y_off + i as u32 + 1;
-            write!(writer, "\x1b[{};{}H", row, x_off + 1)?;
+            buf.clear();
+            let _ = write!(buf, "\x1b[{};{}H", y_off + i as u32 + 1, x_off + 1);
             for x in 0..width {
                 let top_offset = (y * width + x) * 3;
                 let r_top = rgb_data[top_offset];
@@ -34,16 +38,17 @@ impl HalfBlockEncoder {
                     let r_bot = rgb_data[bot_offset];
                     let g_bot = rgb_data[bot_offset + 1];
                     let b_bot = rgb_data[bot_offset + 2];
-                    write!(
-                        writer,
+                    let _ = write!(
+                        buf,
                         "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m\u{2580}",
                         r_top, g_top, b_top, r_bot, g_bot, b_bot,
-                    )?;
+                    );
                 } else {
-                    write!(writer, "\x1b[38;2;{};{};{}m\u{2580}", r_top, g_top, b_top)?;
+                    let _ = write!(buf, "\x1b[38;2;{};{};{}m\u{2580}", r_top, g_top, b_top);
                 }
             }
-            write!(writer, "\x1b[0m")?;
+            buf.push_str("\x1b[0m");
+            writer.write_all(buf.as_bytes())?;
         }
 
         Ok(())

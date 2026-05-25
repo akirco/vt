@@ -1,34 +1,21 @@
-use std::env;
+use crate::protocol::ImageProtocol;
+use std::io::{self, Write};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ImageProtocol {
-    Sixel,
-    Kitty,
-    HalfBlock,
-    Braille,
-    Ascii,
-}
+pub struct CursorGuard;
 
-pub fn determine_protocol(force: Option<&str>) -> ImageProtocol {
-    if let Some(forced) = force {
-        match forced.to_lowercase().as_str() {
-            "kitty" => return ImageProtocol::Kitty,
-            "sixel" => return ImageProtocol::Sixel,
-            "halfblock" => return ImageProtocol::HalfBlock,
-            "braille" => return ImageProtocol::Braille,
-            "ascii" => return ImageProtocol::Ascii,
-            _ => {}
-        }
-    }
-    if is_kitty_available() {
-        ImageProtocol::Kitty
-    } else {
-        ImageProtocol::Sixel
+impl Drop for CursorGuard {
+    fn drop(&mut self) {
+        let _ = std::io::stdout().write_all(b"\x1b[?25h\n");
+        let _ = std::io::stdout().flush();
     }
 }
 
-fn is_kitty_available() -> bool {
-    env::var("KITTY_WINDOW_ID").is_ok()
+pub fn clear_screen<W: Write>(w: &mut W) -> std::io::Result<()> {
+    write!(w, "\x1b[2J")
+}
+
+pub fn hide_cursor<W: Write>(w: &mut W) -> io::Result<()> {
+    write!(w, "\x1b[?25l")
 }
 
 pub fn is_fzf_preview() -> bool {
@@ -70,9 +57,6 @@ pub fn fit_dimensions(
     let (phys_bounds_w, phys_bounds_h) = if let Some((cw, ch)) = size {
         (cw * cell_w, ch * cell_h)
     } else {
-        let tw = (orig_w as f32 * scale) as u32;
-        let th = (orig_h as f32 * scale) as u32;
-
         let (cols, rows) = terminal_size::terminal_size()
             .map(|(w, h)| (w.0 as u32, h.0 as u32))
             .unwrap_or((80, 24));
@@ -80,10 +64,14 @@ pub fn fit_dimensions(
         let max_phys_w = cols * cell_w;
         let max_phys_h = rows.saturating_sub(2) * cell_h;
 
-        if tw * cell_w / px_per_col <= max_phys_w && th * cell_h / px_per_row <= max_phys_h {
-            return (tw, th);
+        if scale < 1.0 {
+            (
+                (max_phys_w as f64 * scale as f64) as u32,
+                (max_phys_h as f64 * scale as f64) as u32,
+            )
+        } else {
+            (max_phys_w, max_phys_h)
         }
-        (max_phys_w, max_phys_h)
     };
 
     let fit = (phys_bounds_w as f64 / orig_w as f64).min(phys_bounds_h as f64 / orig_h as f64);
@@ -92,4 +80,51 @@ pub fn fit_dimensions(
     let target_h = (orig_h as f64 * fit * px_per_row as f64 / cell_h as f64) as u32;
 
     (target_w.max(1), target_h.max(1))
+}
+
+pub fn compute_center_offset(
+    tw: u32,
+    th: u32,
+    protocol: ImageProtocol,
+    center: bool,
+) -> (u32, u32) {
+    if !center {
+        return (0, 0);
+    }
+
+    let (cols, rows) = terminal_size::terminal_size()
+        .map(|(w, h)| (w.0 as u32, h.0 as u32))
+        .unwrap_or((80, 24));
+
+    match protocol {
+        ImageProtocol::Sixel | ImageProtocol::Kitty => {
+            let (cell_w, cell_h) = cell_size();
+            let phys_w = cols * cell_w;
+            let phys_h = rows * cell_h;
+            let cx = ((phys_w.saturating_sub(tw)) / 2) / cell_w;
+            let cy = ((phys_h.saturating_sub(th)) / 2) / cell_h;
+            (cx, cy)
+        }
+        ImageProtocol::HalfBlock => {
+            let fc = tw;
+            let fr = th / 2;
+            let cx = if fc < cols { (cols - fc) / 2 } else { 0 };
+            let cy = if fr < rows { (rows - fr) / 2 } else { 0 };
+            (cx, cy)
+        }
+        ImageProtocol::Braille => {
+            let fc = tw / 2;
+            let fr = th / 4;
+            let cx = if fc < cols { (cols - fc) / 2 } else { 0 };
+            let cy = if fr < rows { (rows - fr) / 2 } else { 0 };
+            (cx, cy)
+        }
+        ImageProtocol::Ascii => {
+            let fc = tw;
+            let fr = th;
+            let cx = if fc < cols { (cols - fc) / 2 } else { 0 };
+            let cy = if fr < rows { (rows - fr) / 2 } else { 0 };
+            (cx, cy)
+        }
+    }
 }
